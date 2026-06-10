@@ -117,7 +117,9 @@ set -g @continuum-save-interval '15'
 # PowerKit with Tokyo Night theme.
 set -g @powerkit_plugins "git,cpu,memory,iops,netspeed,disk,datetime,hostname"
 set -g @powerkit_bar_layout "double"
-set -g @powerkit_plugin_netspeed_interface "eno2"
+# Auto-detect the primary (default-route) network interface so netspeed
+# works on any machine, not just this one.
+run-shell 'tmux set -g @powerkit_plugin_netspeed_interface "$(ip route 2>/dev/null | awk "/^default/{print \$5; exit}")"'
 set -g @powerkit_plugin_netspeed_icon "net"
 set -g @powerkit_plugin_netspeed_icon_download "↓"
 set -g @powerkit_plugin_netspeed_icon_upload "↑"
@@ -140,6 +142,7 @@ set -g @powerkit_theme "tokyo-night"
 set -g @powerkit_theme_variant "night"
 set -g @powerkit_separator_style "none"
 set -g @powerkit_icon_padding "0"
+set -g @powerkit_session_show_mode "false"
 set -g @powerkit_edge_separator_style "none"
 set -g @powerkit_initial_separator_style "none"
 set -g @powerkit_active_window_show_index "false"
