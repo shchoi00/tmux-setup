@@ -47,7 +47,7 @@ cat > "${CONF}" <<'TMUXCONF'
 
 # --- 1. Basic behavior ---
 set -g mouse on
-set -g history-limit 100000
+set -g history-limit 300000
 set -g default-terminal "screen-256color"
 set -g status-style bg=black,fg=white
 setw -g mode-keys vi
@@ -113,6 +113,8 @@ set -g @plugin 'sainnhe/tmux-fzf'
 # Auto-save sessions every 15 min + auto-restore on tmux start (uses resurrect).
 set -g @continuum-restore 'on'
 set -g @continuum-save-interval '15'
+# Save and restore pane contents / scrollback snapshots.
+set -g @resurrect-capture-pane-contents 'on'
 
 # PowerKit with Tokyo Night theme.
 set -g @powerkit_plugins "git,cpu,memory,iops,netspeed,disk,datetime,hostname"

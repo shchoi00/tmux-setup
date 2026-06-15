@@ -12,9 +12,10 @@ bash setup-tmux.sh
 
 - Writes `~/.tmux.conf` (backs up any existing one).
 - Prefix `C-a` (with `C-b` as a secondary prefix), vim-style pane nav/resize,
-  mouse on, 100k scrollback.
+  mouse on, 300k scrollback.
 - TPM + plugins: tmux-sensible, tmux-resurrect, **tmux-continuum** (auto
   save/restore sessions), tmux-yank, **tmux-fzf**.
+- Saves/restores tmux pane contents / scrollback snapshots with tmux-resurrect.
 - CLI tools into `~/.local/bin`: **fzf** (tmux-fzf) and **yazi** (file explorer,
   `prefix + e`).
 - PowerKit status bar (2-line, **text-only / no Nerd Font required**) showing:
