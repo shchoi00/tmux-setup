@@ -10,7 +10,9 @@
 #      continuum, yank, fzf).
 #   4b. Installs CLI tools the config uses: fzf (tmux-fzf) and yazi (file
 #       explorer), as user-level binaries in ~/.local/bin.
-#   5. Reloads the config if a tmux server is already running.
+#   5. Installs a safe tmux-resurrect systemd user timer.
+#   6. Adds tmux.service restart-on-failure hardening when systemd user units exist.
+#   7. Reloads the config if a tmux server is already running.
 #
 # Usage:  bash setup-tmux.sh
 #
@@ -113,8 +115,11 @@ set -g @plugin 'sainnhe/tmux-fzf'
 # Auto-save sessions every 15 min + auto-restore on tmux start (uses resurrect).
 set -g @continuum-restore 'on'
 set -g @continuum-save-interval '15'
+set -g @continuum-boot 'on'
 # Save and restore pane contents / scrollback snapshots.
 set -g @resurrect-capture-pane-contents 'on'
+# Restore common long-running pane processes after tmux-resurrect reloads panes.
+set -g @resurrect-processes '"~node" "~codex" "~omx" "~claude" "~python" "~python3" "~ollama" "bash"'
 
 # PowerKit with Tokyo Night theme.
 set -g @powerkit_plugins "git,cpu,memory,iops,netspeed,disk,datetime,hostname"
@@ -213,7 +218,129 @@ if ! command -v yazi >/dev/null 2>&1 && [ ! -x "${HOME}/.local/bin/yazi" ]; then
   fi
 fi
 
-# --- 5. Reload if a server is running --------------------------------------
+# --- 5. Safe tmux-resurrect timer ------------------------------------------
+# tmux-continuum normally saves from the tmux status line. That is convenient,
+# but fragile: if systemd-oomd kills the tmux server first, the final save can
+# produce an empty snapshot and move the `last` symlink to that corrupt file.
+# This wrapper runs from a real systemd user timer and refuses invalid snapshots.
+SAFE_SAVE_BIN="${HOME}/.local/bin/tmux-resurrect-safe-save"
+mkdir -p "${HOME}/.local/bin" "${HOME}/.config/systemd/user" "${HOME}/.config/systemd/user/tmux.service.d"
+cat > "${SAFE_SAVE_BIN}" <<'SAFESAVE'
+#!/usr/bin/env bash
+set -u
+
+resurrect_dir="${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect"
+save_script="$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh"
+log_file="$resurrect_dir/safe-save.log"
+last_link="$resurrect_dir/last"
+
+mkdir -p "$resurrect_dir"
+log() { printf '%s %s\n' "$(date -Is)" "$*" >> "$log_file"; }
+
+is_valid_snapshot() {
+  local file="$1"
+  [ -s "$file" ] || return 1
+  grep -q $'^pane\t' "$file" || return 1
+  grep -q $'^window\t' "$file" || return 1
+}
+
+best_valid_snapshot_basename() {
+  find "$resurrect_dir" -maxdepth 1 -type f -name 'tmux_resurrect_*.txt' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn \
+    | while read -r _ file; do
+        if is_valid_snapshot "$file"; then
+          basename "$file"
+          return 0
+        fi
+      done
+}
+
+if ! tmux has-session >/dev/null 2>&1; then
+  log "skip: no tmux server"
+  exit 0
+fi
+
+prev=""
+if [ -L "$last_link" ]; then
+  prev="$(readlink "$last_link" || true)"
+fi
+
+if [ ! -x "$save_script" ]; then
+  log "error: save script missing: $save_script"
+  exit 1
+fi
+
+"$save_script" quiet >/dev/null 2>&1 || true
+
+new=""
+if [ -L "$last_link" ]; then
+  new="$(readlink "$last_link" || true)"
+fi
+new_file="$resurrect_dir/$new"
+
+if [ -n "$new" ] && is_valid_snapshot "$new_file"; then
+  log "saved: $new"
+  exit 0
+fi
+
+fallback=""
+if [ -n "$prev" ] && is_valid_snapshot "$resurrect_dir/$prev"; then
+  fallback="$prev"
+else
+  fallback="$(best_valid_snapshot_basename || true)"
+fi
+
+if [ -n "$fallback" ]; then
+  ln -sfn "$fallback" "$last_link"
+  log "invalid snapshot '${new:-<none>}' rejected; restored last -> $fallback"
+  exit 1
+fi
+
+log "error: invalid snapshot '${new:-<none>}' and no valid fallback"
+exit 1
+SAFESAVE
+chmod +x "${SAFE_SAVE_BIN}"
+
+cat > "${HOME}/.config/systemd/user/tmux-resurrect-safe-save.service" <<'UNIT'
+[Unit]
+Description=Safely save tmux-resurrect snapshot
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/tmux-resurrect-safe-save
+UNIT
+
+cat > "${HOME}/.config/systemd/user/tmux-resurrect-safe-save.timer" <<'UNIT'
+[Unit]
+Description=Run safe tmux-resurrect snapshot periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=tmux-resurrect-safe-save.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+cat > "${HOME}/.config/systemd/user/tmux.service.d/restart.conf" <<'UNIT'
+[Service]
+Restart=on-failure
+RestartSec=2
+UNIT
+
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+  systemctl --user daemon-reload || warn "systemd user daemon-reload failed."
+  systemctl --user enable --now tmux-resurrect-safe-save.timer || warn "Could not enable safe save timer."
+  systemctl --user reset-failed tmux.service >/dev/null 2>&1 || true
+  log "Installed safe tmux-resurrect systemd timer and tmux.service restart hardening."
+else
+  warn "systemd --user is unavailable; safe-save script was installed but timer was not enabled."
+fi
+
+# --- 7. Reload if a server is running --------------------------------------
 if tmux info >/dev/null 2>&1; then
   tmux source-file "${CONF}" && log "Reloaded config into the running tmux server."
 else
